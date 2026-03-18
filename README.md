@@ -1,1 +1,0 @@
-# Hoshi-Reader-Android
