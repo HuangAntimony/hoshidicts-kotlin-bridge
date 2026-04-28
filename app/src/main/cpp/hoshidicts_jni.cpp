@@ -4,12 +4,12 @@
 #include <string>
 #include <vector>
 
-#include "hoshidicts/include/hoshidicts.h"
+#include "hoshidicts.h"
 
 namespace {
     struct LookupObject {
         DictionaryQuery query;
-        Deconjugator deconjugator;
+        Deinflector deconjugator;
         std::unique_ptr<Lookup> lookup;
 
         LookupObject() : lookup(std::make_unique<Lookup>(query, deconjugator)) {}
@@ -184,7 +184,12 @@ namespace {
                                           "(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Lde/manhhao/hoshi/TermResult;I)V");
         jstring matched = new_string(env, result.matched);
         jstring deinflected = new_string(env, result.deinflected);
-        jobjectArray process = new_process_array(env, result.process);
+        std::vector<std::string> process_items;
+        process_items.reserve(result.trace.size());
+        for (const auto &step: result.trace) {
+            process_items.push_back(step.name);
+        }
+        jobjectArray process = new_process_array(env, process_items);
         jobject term = new_term_result(env, result.term);
         jobject out = env->NewObject(cls, ctor, matched, deinflected, process, term,
                                      static_cast<jint>(result.preprocessor_steps));
