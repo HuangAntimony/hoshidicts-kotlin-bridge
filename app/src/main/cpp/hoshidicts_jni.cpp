@@ -276,10 +276,10 @@ Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv *env, jobject, jlong sessio
 
 extern "C" JNIEXPORT jobject JNICALL
 Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv *env, jobject, jstring zip_path,
-                                                  jstring output_dir) {
+                                                  jstring output_dir, jboolean low_ram) {
     auto zip_path_str = jstring_to_std_string(env, zip_path);
     auto output_dir_str = jstring_to_std_string(env, output_dir);
-    const auto result = dictionary_importer::import(zip_path_str, output_dir_str, true);
+    const auto result = dictionary_importer::import(zip_path_str, output_dir_str, low_ram);
     return new_import_result(env, result.success, result.title,
                              static_cast<jlong>(result.term_count),
                              static_cast<jlong>(result.meta_count),
