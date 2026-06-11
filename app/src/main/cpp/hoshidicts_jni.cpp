@@ -1,6 +1,7 @@
 #include <jni.h>
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -9,12 +10,13 @@
 namespace {
     struct LookupObject {
         std::unique_ptr<DictionaryQuery> query;
-        Deinflector deinflector;
+        const LanguageProcessor &language;
         std::unique_ptr<Lookup> lookup;
 
-        LookupObject()
+        explicit LookupObject(const std::string &language_id)
             : query(std::make_unique<DictionaryQuery>()),
-              lookup(std::make_unique<Lookup>(*query, deinflector)) {}
+              language(language::get(language_id)),
+              lookup(std::make_unique<Lookup>(*query, language)) {}
     };
 
     LookupObject *as_object(jlong handle) { return reinterpret_cast<LookupObject *>(handle); }
@@ -38,6 +40,17 @@ namespace {
 
     jstring new_string(JNIEnv *env, const std::string &value) {
         return env->NewStringUTF(value.c_str());
+    }
+
+    jobjectArray new_string_array(JNIEnv *env, const std::vector<std::string> &values) {
+        jclass cls = env->FindClass("java/lang/String");
+        jobjectArray array = env->NewObjectArray(static_cast<jsize>(values.size()), cls, nullptr);
+        for (size_t i = 0; i < values.size(); ++i) {
+            jstring item = new_string(env, values[i]);
+            env->SetObjectArrayElement(array, static_cast<jsize>(i), item);
+            env->DeleteLocalRef(item);
+        }
+        return array;
     }
 
     jobject new_import_result(JNIEnv *env, bool success, const std::string &title,
@@ -64,11 +77,56 @@ namespace {
     }
 
     jobjectArray
-    new_process_array(JNIEnv *env, const std::vector<TransformGroup> &trace) {
+    new_transform_group_array(JNIEnv *env, const std::vector<TransformGroup> &trace) {
         jclass cls = env->FindClass("de/manhhao/hoshi/TransformGroup");
         jobjectArray array = env->NewObjectArray(static_cast<jsize>(trace.size()), cls, nullptr);
         for (size_t i = 0; i < trace.size(); ++i) {
             jobject item = new_transform_group(env, trace[i]);
+            env->SetObjectArrayElement(array, static_cast<jsize>(i), item);
+            env->DeleteLocalRef(item);
+        }
+        return array;
+    }
+
+    const char *trace_source_name(TraceSource source) {
+        switch (source) {
+            case TraceSource::Algorithm:
+                return "ALGORITHM";
+            case TraceSource::Dictionary:
+                return "DICTIONARY";
+            case TraceSource::Both:
+                return "BOTH";
+        }
+    }
+
+    jobject new_trace_source(JNIEnv *env, TraceSource source) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/TraceSource");
+        jfieldID field = env->GetStaticFieldID(cls, trace_source_name(source),
+                                               "Lde/manhhao/hoshi/TraceSource;");
+        return env->GetStaticObjectField(cls, field);
+    }
+
+    jobject new_trace_candidate(JNIEnv *env, const TraceCandidate &candidate) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/TraceCandidate");
+        jmethodID ctor = env->GetMethodID(
+                cls, "<init>",
+                "(Ljava/lang/String;ILde/manhhao/hoshi/TraceSource;[Lde/manhhao/hoshi/TransformGroup;)V");
+        jstring deinflected = new_string(env, candidate.deinflected);
+        jobject source = new_trace_source(env, candidate.source);
+        jobjectArray trace = new_transform_group_array(env, candidate.trace);
+        jobject out = env->NewObject(cls, ctor, deinflected, static_cast<jint>(candidate.preprocessor_steps),
+                                     source, trace);
+        env->DeleteLocalRef(deinflected);
+        env->DeleteLocalRef(source);
+        env->DeleteLocalRef(trace);
+        return out;
+    }
+
+    jobjectArray new_trace_candidate_array(JNIEnv *env, const std::vector<TraceCandidate> &candidates) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/TraceCandidate");
+        jobjectArray array = env->NewObjectArray(static_cast<jsize>(candidates.size()), cls, nullptr);
+        for (size_t i = 0; i < candidates.size(); ++i) {
+            jobject item = new_trace_candidate(env, candidates[i]);
             env->SetObjectArrayElement(array, static_cast<jsize>(i), item);
             env->DeleteLocalRef(item);
         }
@@ -150,16 +208,18 @@ namespace {
 
     jobject new_pitch_entry(JNIEnv *env, const PitchEntry &entry) {
         jclass cls = env->FindClass("de/manhhao/hoshi/PitchEntry");
-        jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/lang/String;[I)V");
+        jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/lang/String;[I[Ljava/lang/String;)V");
         jstring dict_name = new_string(env, entry.dict_name);
         jintArray positions = env->NewIntArray(static_cast<jsize>(entry.pitch_positions.size()));
         if (!entry.pitch_positions.empty()) {
             env->SetIntArrayRegion(positions, 0, static_cast<jsize>(entry.pitch_positions.size()),
                                    reinterpret_cast<const jint *>(entry.pitch_positions.data()));
         }
-        jobject out = env->NewObject(cls, ctor, dict_name, positions);
+        jobjectArray transcriptions = new_string_array(env, entry.transcriptions);
+        jobject out = env->NewObject(cls, ctor, dict_name, positions, transcriptions);
         env->DeleteLocalRef(dict_name);
         env->DeleteLocalRef(positions);
+        env->DeleteLocalRef(transcriptions);
         return out;
     }
 
@@ -198,17 +258,14 @@ namespace {
     jobject new_lookup_result(JNIEnv *env, const LookupResult &result) {
         jclass cls = env->FindClass("de/manhhao/hoshi/LookupResult");
         jmethodID ctor = env->GetMethodID(cls, "<init>",
-                                          "(Ljava/lang/String;Ljava/lang/String;[Lde/manhhao/hoshi/TransformGroup;Lde/manhhao/hoshi/TermResult;I)V");
+                                          "(Ljava/lang/String;Lde/manhhao/hoshi/TermResult;[Lde/manhhao/hoshi/TraceCandidate;)V");
         jstring matched = new_string(env, result.matched);
-        jstring deinflected = new_string(env, result.deinflected);
-        jobjectArray process = new_process_array(env, result.trace);
         jobject term = new_term_result(env, result.term);
-        jobject out = env->NewObject(cls, ctor, matched, deinflected, process, term,
-                                     static_cast<jint>(result.preprocessor_steps));
+        jobjectArray trace_candidates = new_trace_candidate_array(env, result.trace_candidates);
+        jobject out = env->NewObject(cls, ctor, matched, term, trace_candidates);
         env->DeleteLocalRef(matched);
-        env->DeleteLocalRef(deinflected);
-        env->DeleteLocalRef(process);
         env->DeleteLocalRef(term);
+        env->DeleteLocalRef(trace_candidates);
         return out;
     }
 
@@ -248,8 +305,17 @@ namespace {
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_de_manhhao_hoshi_HoshiDicts_createLookupObject(JNIEnv *, jobject) {
-    return reinterpret_cast<jlong>(new LookupObject());
+Java_de_manhhao_hoshi_HoshiDicts_createLookupObject(JNIEnv *env, jobject, jstring language_id) {
+    auto language_id_str = jstring_to_std_string(env, language_id);
+    try {
+        return reinterpret_cast<jlong>(new LookupObject(language_id_str));
+    } catch (const std::invalid_argument &error) {
+        jclass cls = env->FindClass("java/lang/IllegalArgumentException");
+        if (cls != nullptr) {
+            env->ThrowNew(cls, error.what());
+        }
+        return 0L;
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -269,9 +335,9 @@ Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv *env, jobject, jlong sessio
                     [&](const std::string &path) { query->add_freq_dict(path); });
     for_each_string(env, pitch_paths,
                     [&](const std::string &path) { query->add_pitch_dict(path); });
-    obj->lookup.reset();
+    auto lookup = std::make_unique<Lookup>(*query, obj->language);
+    obj->lookup = std::move(lookup);
     obj->query = std::move(query);
-    obj->lookup = std::make_unique<Lookup>(*obj->query, obj->deinflector);
 }
 
 extern "C" JNIEXPORT jobject JNICALL

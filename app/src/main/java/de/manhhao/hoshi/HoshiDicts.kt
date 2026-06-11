@@ -35,6 +35,7 @@ class FrequencyEntry(
 class PitchEntry(
     val dictName: String,
     val pitchPositions: IntArray,
+    val transcriptions: Array<String>,
 )
 
 class TermResult(
@@ -51,12 +52,23 @@ class TransformGroup(
     val description: String,
 )
 
+enum class TraceSource {
+    ALGORITHM,
+    DICTIONARY,
+    BOTH,
+}
+
+class TraceCandidate(
+    val deinflected: String,
+    val preprocessorSteps: Int,
+    val source: TraceSource,
+    val trace: Array<TransformGroup>,
+)
+
 class LookupResult(
     val matched: String,
-    val deinflected: String,
-    val process: Array<TransformGroup>,
     val term: TermResult,
-    val preprocessorSteps: Int,
+    val traceCandidates: Array<TraceCandidate>,
 )
 
 object HoshiDicts {
@@ -64,10 +76,8 @@ object HoshiDicts {
         System.loadLibrary("hoshidicts_jni")
     }
 
-    val lookupObject: Long = createLookupObject()
-
     external fun importDictionary(zipPath: String, outputDir: String, lowRam: Boolean = false): ImportResult
-    external fun createLookupObject(): Long
+    external fun createLookupObject(languageId: String): Long
     external fun destroyLookupObject(session: Long)
     external fun rebuildQuery(
         session: Long,
