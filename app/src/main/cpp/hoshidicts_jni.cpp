@@ -3,6 +3,8 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "hoshidicts.h"
@@ -67,14 +69,29 @@ namespace {
         return array;
     }
 
+    jintArray new_int_array(JNIEnv *env, const std::vector<int> &values) {
+        jintArray array = env->NewIntArray(static_cast<jsize>(values.size()));
+        if (!values.empty()) {
+            env->SetIntArrayRegion(array, 0, static_cast<jsize>(values.size()),
+                                   reinterpret_cast<const jint *>(values.data()));
+        }
+        return array;
+    }
+
+    jlong summary_meta_count(const SummaryMetaCount &counts, const std::string &name) {
+        const auto entry = counts.find(name);
+        return entry == counts.end() ? 0L : static_cast<jlong>(entry->second);
+    }
+
     jobject new_import_result(JNIEnv *env, bool success, const std::string &title,
                               jlong term_count, jlong meta_count, jlong freq_count,
-                              jlong pitch_count, jlong media_count) {
+                              jlong pitch_count, jlong kanji_count, jlong media_count) {
         jclass cls = env->FindClass("de/manhhao/hoshi/ImportResult");
-        jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;JJJJJ)V");
+        jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;JJJJJJ)V");
         jstring jtitle = new_string(env, title);
         jobject out = env->NewObject(cls, ctor, static_cast<jboolean>(success), jtitle,
-                                     term_count, meta_count, freq_count, pitch_count, media_count);
+                                     term_count, meta_count, freq_count, pitch_count, kanji_count,
+                                     media_count);
         env->DeleteLocalRef(jtitle);
         return out;
     }
@@ -220,19 +237,42 @@ namespace {
         return array;
     }
 
+    jobject new_pitch(JNIEnv *env, const Pitch &pitch) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/Pitch");
+        jmethodID ctor = env->GetMethodID(cls, "<init>", "(ILjava/lang/String;[I[I)V");
+        jstring pattern = new_string(env, pitch.pattern);
+        jintArray nasal = new_int_array(env, pitch.nasal);
+        jintArray devoice = new_int_array(env, pitch.devoice);
+        jobject out = env->NewObject(cls, ctor, static_cast<jint>(pitch.position), pattern, nasal,
+                                     devoice);
+        env->DeleteLocalRef(pattern);
+        env->DeleteLocalRef(nasal);
+        env->DeleteLocalRef(devoice);
+        return out;
+    }
+
+    jobjectArray new_pitch_array(JNIEnv *env, const std::vector<Pitch> &pitches) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/Pitch");
+        jobjectArray array = env->NewObjectArray(static_cast<jsize>(pitches.size()), cls, nullptr);
+        for (size_t i = 0; i < pitches.size(); ++i) {
+            jobject item = new_pitch(env, pitches[i]);
+            env->SetObjectArrayElement(array, static_cast<jsize>(i), item);
+            env->DeleteLocalRef(item);
+        }
+        return array;
+    }
+
     jobject new_pitch_entry(JNIEnv *env, const PitchEntry &entry) {
         jclass cls = env->FindClass("de/manhhao/hoshi/PitchEntry");
-        jmethodID ctor = env->GetMethodID(cls, "<init>", "(Ljava/lang/String;[I[Ljava/lang/String;)V");
+        jmethodID ctor = env->GetMethodID(
+                cls, "<init>",
+                "(Ljava/lang/String;[Lde/manhhao/hoshi/Pitch;[Ljava/lang/String;)V");
         jstring dict_name = new_string(env, entry.dict_name);
-        jintArray positions = env->NewIntArray(static_cast<jsize>(entry.pitch_positions.size()));
-        if (!entry.pitch_positions.empty()) {
-            env->SetIntArrayRegion(positions, 0, static_cast<jsize>(entry.pitch_positions.size()),
-                                   reinterpret_cast<const jint *>(entry.pitch_positions.data()));
-        }
+        jobjectArray pitches = new_pitch_array(env, entry.pitches);
         jobjectArray transcriptions = new_string_array(env, entry.transcriptions);
-        jobject out = env->NewObject(cls, ctor, dict_name, positions, transcriptions);
+        jobject out = env->NewObject(cls, ctor, dict_name, pitches, transcriptions);
         env->DeleteLocalRef(dict_name);
-        env->DeleteLocalRef(positions);
+        env->DeleteLocalRef(pitches);
         env->DeleteLocalRef(transcriptions);
         return out;
     }
@@ -246,6 +286,77 @@ namespace {
             env->DeleteLocalRef(item);
         }
         return array;
+    }
+
+    jobject new_kanji_stat(JNIEnv *env, const std::pair<const std::string, std::string> &stat) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/KanjiStat");
+        jmethodID ctor = env->GetMethodID(cls, "<init>",
+                                          "(Ljava/lang/String;Ljava/lang/String;)V");
+        jstring key = new_string(env, stat.first);
+        jstring value = new_string(env, stat.second);
+        jobject out = env->NewObject(cls, ctor, key, value);
+        env->DeleteLocalRef(key);
+        env->DeleteLocalRef(value);
+        return out;
+    }
+
+    jobjectArray new_kanji_stat_array(
+            JNIEnv *env, const std::unordered_map<std::string, std::string> &stats) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/KanjiStat");
+        jobjectArray array = env->NewObjectArray(static_cast<jsize>(stats.size()), cls, nullptr);
+        size_t index = 0;
+        for (const auto &stat: stats) {
+            jobject item = new_kanji_stat(env, stat);
+            env->SetObjectArrayElement(array, static_cast<jsize>(index++), item);
+            env->DeleteLocalRef(item);
+        }
+        return array;
+    }
+
+    jobject new_kanji_entry(JNIEnv *env, const KanjiEntry &entry) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/KanjiEntry");
+        jmethodID ctor = env->GetMethodID(
+                cls, "<init>",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[Lde/manhhao/hoshi/KanjiStat;)V");
+        jstring dict_name = new_string(env, entry.dict_name);
+        jstring onyomi = new_string(env, entry.onyomi);
+        jstring kunyomi = new_string(env, entry.kunyomi);
+        jstring tags = new_string(env, entry.tags);
+        jobjectArray definitions = new_string_array(env, entry.definitions);
+        jobjectArray stats = new_kanji_stat_array(env, entry.stats);
+        jobject out = env->NewObject(cls, ctor, dict_name, onyomi, kunyomi, tags, definitions,
+                                     stats);
+        env->DeleteLocalRef(dict_name);
+        env->DeleteLocalRef(onyomi);
+        env->DeleteLocalRef(kunyomi);
+        env->DeleteLocalRef(tags);
+        env->DeleteLocalRef(definitions);
+        env->DeleteLocalRef(stats);
+        return out;
+    }
+
+    jobjectArray new_kanji_entry_array(JNIEnv *env, const std::vector<KanjiEntry> &entries) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/KanjiEntry");
+        jobjectArray array = env->NewObjectArray(static_cast<jsize>(entries.size()), cls, nullptr);
+        for (size_t i = 0; i < entries.size(); ++i) {
+            jobject item = new_kanji_entry(env, entries[i]);
+            env->SetObjectArrayElement(array, static_cast<jsize>(i), item);
+            env->DeleteLocalRef(item);
+        }
+        return array;
+    }
+
+    jobject new_kanji_result(JNIEnv *env, const KanjiResult &result) {
+        jclass cls = env->FindClass("de/manhhao/hoshi/KanjiResult");
+        jmethodID ctor = env->GetMethodID(
+                cls, "<init>",
+                "(Ljava/lang/String;[Lde/manhhao/hoshi/KanjiEntry;)V");
+        jstring character = new_string(env, result.character);
+        jobjectArray entries = new_kanji_entry_array(env, result.entries);
+        jobject out = env->NewObject(cls, ctor, character, entries);
+        env->DeleteLocalRef(character);
+        env->DeleteLocalRef(entries);
+        return out;
     }
 
     jobject new_term_result(JNIEnv *env, const TermResult &term) {
@@ -340,7 +451,7 @@ Java_de_manhhao_hoshi_HoshiDicts_destroyLookupObject(JNIEnv *, jobject, jlong se
 extern "C" JNIEXPORT void JNICALL
 Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv *env, jobject, jlong session,
                                               jobjectArray term_paths, jobjectArray freq_paths,
-                                              jobjectArray pitch_paths) {
+                                              jobjectArray pitch_paths, jobjectArray kanji_paths) {
     LookupObject *obj = as_object(session);
     auto query = std::make_unique<DictionaryQuery>();
     for_each_string(env, term_paths,
@@ -349,6 +460,8 @@ Java_de_manhhao_hoshi_HoshiDicts_rebuildQuery(JNIEnv *env, jobject, jlong sessio
                     [&](const std::string &path) { query->add_freq_dict(path); });
     for_each_string(env, pitch_paths,
                     [&](const std::string &path) { query->add_pitch_dict(path); });
+    for_each_string(env, kanji_paths,
+                    [&](const std::string &path) { query->add_kanji_dict(path); });
     auto lookup = std::make_unique<Lookup>(*query, obj->language);
     obj->lookup = std::move(lookup);
     obj->query = std::move(query);
@@ -360,12 +473,16 @@ Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv *env, jobject, jstring 
     auto zip_path_str = jstring_to_std_string(env, zip_path);
     auto output_dir_str = jstring_to_std_string(env, output_dir);
     const auto result = dictionary_importer::import(zip_path_str, output_dir_str, low_ram);
-    return new_import_result(env, result.success, result.title,
-                             static_cast<jlong>(result.term_count),
-                             static_cast<jlong>(result.meta_count),
-                             static_cast<jlong>(result.freq_count),
-                             static_cast<jlong>(result.pitch_count),
-                             static_cast<jlong>(result.media_count));
+    const auto &counts = result.summary.counts;
+    return new_import_result(
+            env, result.success, result.title,
+            static_cast<jlong>(counts.terms.total),
+            summary_meta_count(counts.termMeta, "total"),
+            summary_meta_count(counts.termMeta, "freq"),
+            summary_meta_count(counts.termMeta, "pitch") +
+                    summary_meta_count(counts.termMeta, "ipa"),
+            static_cast<jlong>(counts.kanji.total),
+            static_cast<jlong>(counts.media.total));
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
@@ -376,6 +493,13 @@ Java_de_manhhao_hoshi_HoshiDicts_lookup(JNIEnv *env, jobject, jlong session, jst
     auto result = obj->lookup->lookup(text_str, static_cast<int>(max_results),
                                       static_cast<size_t>(scan_length));
     return new_lookup_result_array(env, result);
+}
+
+extern "C" JNIEXPORT jobject JNICALL
+Java_de_manhhao_hoshi_HoshiDicts_queryKanji(JNIEnv *env, jobject, jlong session, jstring kanji) {
+    LookupObject *obj = as_object(session);
+    auto kanji_str = jstring_to_std_string(env, kanji);
+    return new_kanji_result(env, obj->query->query_kanji(kanji_str));
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
