@@ -486,12 +486,22 @@ Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv *env, jobject, jstring 
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
-Java_de_manhhao_hoshi_HoshiDicts_lookup(JNIEnv *env, jobject, jlong session, jstring text,
-                                        jint max_results, jint scan_length) {
+Java_de_manhhao_hoshi_HoshiDicts_lookupWithOptions(JNIEnv *env, jobject, jlong session, jstring text,
+                                        jint max_results, jint scan_length, jint frequency_order, jstring frequency_dictionary) {
     LookupObject *obj = as_object(session);
     auto text_str = jstring_to_std_string(env, text);
+    LookupOptions options;
+    switch (frequency_order) {
+        case 1: options.frequency_order = LookupFrequencyOrder::Ascending; break;
+        case 2: options.frequency_order = LookupFrequencyOrder::Descending; break;
+        case 3: options.frequency_order = LookupFrequencyOrder::Disabled; break;
+        default: options.frequency_order = LookupFrequencyOrder::Auto; break;
+    }
+    if (frequency_dictionary != nullptr) {
+        options.frequency_dictionary = jstring_to_std_string(env, frequency_dictionary);
+    }
     auto result = obj->lookup->lookup(text_str, static_cast<int>(max_results),
-                                      static_cast<size_t>(scan_length));
+                                      static_cast<size_t>(scan_length), options);
     return new_lookup_result_array(env, result);
 }
 
