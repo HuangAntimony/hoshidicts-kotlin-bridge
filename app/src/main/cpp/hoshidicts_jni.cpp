@@ -85,14 +85,16 @@ namespace {
 
     jobject new_import_result(JNIEnv *env, bool success, const std::string &title,
                               jlong term_count, jlong meta_count, jlong freq_count,
-                              jlong pitch_count, jlong kanji_count, jlong media_count) {
+                              jlong pitch_count, jlong kanji_count, jlong media_count, const std::string &error) {
         jclass cls = env->FindClass("de/manhhao/hoshi/ImportResult");
-        jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;JJJJJJ)V");
+        jmethodID ctor = env->GetMethodID(cls, "<init>", "(ZLjava/lang/String;JJJJJJLjava/lang/String;)V");
         jstring jtitle = new_string(env, title);
+        jstring jerror = new_string(env, error);
         jobject out = env->NewObject(cls, ctor, static_cast<jboolean>(success), jtitle,
                                      term_count, meta_count, freq_count, pitch_count, kanji_count,
-                                     media_count);
+                                     media_count, jerror);
         env->DeleteLocalRef(jtitle);
+        env->DeleteLocalRef(jerror);
         return out;
     }
 
@@ -482,7 +484,7 @@ Java_de_manhhao_hoshi_HoshiDicts_importDictionary(JNIEnv *env, jobject, jstring 
             summary_meta_count(counts.termMeta, "pitch") +
                     summary_meta_count(counts.termMeta, "ipa"),
             static_cast<jlong>(counts.kanji.total),
-            static_cast<jlong>(counts.media.total));
+            static_cast<jlong>(counts.media.total), result.error);
 }
 
 extern "C" JNIEXPORT jobjectArray JNICALL
